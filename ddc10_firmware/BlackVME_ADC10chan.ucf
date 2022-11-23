@@ -1,0 +1,808 @@
+# BlackVME Revision 0 UCF file for the 10-channel ADC card.
+# CONFIDENTIAL. NOT FOR DISTRIBUTION. 
+# DO NOT GIVE TO ANYBODY WITHOUT WRITTEN PERMISSION.
+# (c) Wojtek Skulski 2010-2013.
+# File BlackVME_ADC10chan.ucf.odc  
+# The "master file" from which the actual .ucf can be created.
+# To generate .ucf "save copy as.." .txt, rename to .ucf.
+# DO NOT EDIT THE .ucf FILE. EDIT THIS FILE AND THEN CONVERT TO .ucf.
+# Connections to all the relevant FPGA pins are listed in this file. 
+# NOTE: netnames in the UCF file are case sensitive.
+# ---------------------------------------------------------------------
+# ---------------   10-channel ADC daughter card  ---------------------
+# Nets. The mezzanine connectors 0 and 1 are related to the ADC 
+# 10-channel daughter card. The net names MEZZxxx are the 
+# motherboard names. The leftmost NETs are the daughter names.
+# Single-ended versus the differential ADC readout.
+# Two names are given: the single-ended and the differential.
+# The AD9258/AD9648 can be configured either way. The ADC schematic 
+# uses the LVDS convention, but the firmware uses CMOS. 
+# Active-low signals.
+# All active-low signals are marked with _b at the end ("bar"). 
+# -------------------------------------------------------------------------
+# New HW revisions:
+#     The HDMI has changed in Rev.E (new differential pair)
+#     M0 pin assigned to VME interrupt
+# -------------------------------------------------------------------------
+
+###################################
+###    Pullups and pulldowns    ###
+###################################
+# Pin-strapped pins should have appropriate pullups/downs 
+# Constraints Guide cgd.pdf page 97.
+
+DEFAULT PULLUP = TRUE;
+NET "TXDAC_CS_B" PULLDOWN = TRUE;
+NET "TXDAC_SCK"  PULLDOWN = TRUE;
+
+###################################
+###  -- Global constraints  --  ###
+###################################
+# Constraints Guide cgd.pdf page 142.
+# Pack flip-flops into IOBs.
+INST "AD0*" IOB = FORCE;
+INST "AD1*" IOB = FORCE;
+INST "AD2*" IOB = FORCE;
+INST "AD3*" IOB = FORCE;
+INST "AD4*" IOB = FORCE;
+
+# Output speed can be slow, unless proven otherwise.
+# SLOW is the default, no need to specify.
+# Even slower is QUIETIO, even though the Constraint Guide does not 
+# mention it for Spartan-6. But the data sheet does.
+NET "BF*"   SLEW = QUIETIO;	# Blackfin interface
+NET "TXD*"  SLEW = SLOW;	# TxDAC. Was FAST
+#NET "TMP*" SLEW = QUIETIO;	# temperature sensor
+#NET "V_*"  SLEW = QUIETIO;	# VME interface
+
+# Drive strength from table 27, Data Sheet p.21 (ds162.pdf)
+# LVCMOS33  2, 4, 6, 8, 12, 16, 24 mA. Default: 12 mA.
+
+INST "BF*"   DRIVE = 4;	# Blackfin interface
+INST "TXD*"  DRIVE = 12;	# TxDAC. Was 24
+INST "SDAC*" DRIVE = 4;	# SDAC SPI interface.
+#INST "TMP*" DRIVE = 6;	# temperature sensor
+#INST "V_*"  DRIVE = 6;	# VME interface
+
+NET "LED*" TIG;	# timing not constrained for LEDs
+#NET "TMP*" TIG;	# timing not constrained for SPI
+
+# All connector I/O pins on this daughter card are 1.8V.
+# The ADC capture is single-ended, thus no LVDS.
+NET "AD*"	IOSTANDARD = LVCMOS18;
+NET "TXDAC*"	IOSTANDARD = LVCMOS18;
+NET "TXDAC_CS_B"	IOSTANDARD = LVCMOS18;
+NET "TXDAC_SCK"	IOSTANDARD = LVCMOS18;
+NET "SDAC*"	IOSTANDARD = LVCMOS18;
+#NET "TMP*"	IOSTANDARD = LVCMOS18;
+
+# All other nets are 3.3V.
+
+#########################################
+###    -- SPI  on the main board  --  ###
+#########################################
+# SPI is used for booting the FPGA. On Rev 0, after boot it somehow
+# kills the Blackfin chip. 
+# Jumper wires on Rev 0 board connect BF SPISEL lines to FPGA balls.
+# On Rev A these jumpers were made permanent.
+#   SPI net	FPGA pin	  connected to BF pin
+NET "BF_SPISEL_4"	LOC="AK4";	# BF_PF4 --> ADC  chips
+NET "BF_SPISEL_5"	LOC="AK3";	# BF_PF5 --> SDAC chips
+# NET "BF_SPISEL_6"	LOC="AK2";	# BF_PF6
+# NET "BF_SPISEL_7"	LOC="AJ2";	# BF_PF7
+
+NET "XSPI*"   IOSTANDARD = LVCMOS33;
+NET "XSPI_MISO"	LOC="AH25";	# BF_MISO
+NET "XSPI_MOSI"	LOC="AK25";	# BF_MOSI
+NET "XSPI_CLK"	LOC="AJ26";	# SPI clock
+NET "XSPI_CS_B"	LOC="AK6";	# BF_PF3
+
+# The XSPI signals are routed to unused balls to prevent ISE from 
+# removing these from the design. CS_B might be routed to an LED.
+NET "UNUSED_MISO"	LOC="J20";	# XSPI_MISO
+NET "UNUSED_MOSI"	LOC="G20";	# XSPI_MOSI
+NET "UNUSED_CLK"	LOC="J19";	# XSPI clock
+NET "UNUSED_CS_B"	LOC="H19";	# XSPI CS_B
+
+#########################################
+###  -- Clocks  on the main board --  ###
+#########################################
+# These clocks are available even without the daughter card:
+# 25 MHz, main PCB, and 16 MHz (if installed).
+# 25 MHz comes from the crystal that also feeds the BF and Ethernet.
+# The clock can be driven into the fabric with global clock buffer.
+# DCM in FPGA ES silicon revision does not allow 25 MHz.
+# Rev.0 used ES silicon, all subsequent revisions used regular silicon.
+# The PCB clock is coming either from the "main" crystal or from 
+# the front panel MMCX coax. This clock is also sent to the daughter card.
+# The daughter card returns the 1.8V clock aligned to ADC bits.
+# Use the returned clock to capture the ADC bits.
+# The main PCB clock is strongly discouraged because the ADCs
+# are not really aligned to this clock.
+
+# The ADC_A single-ended forwarded clock is Mezz0N_1 (not a GCLK!)
+# The ADC_B single-ended forwarded clock is IO37N_gclk12
+# The ADC_C single-ended forwarded clock is IO36N_gclk14
+# The ADC_D single-ended forwarded clock is Mezz1N_8 (not a GCLK!)
+# The ADC_E single-ended forwarded clock is IO35N_gclk16
+
+# Clock net lengths from clock source to pins.
+# main motherboard clock = 5655 to FPGA pin
+# mezzanine clock 0  len = 5505 to Hirose pin
+# Then it goes through two chips on daughter card. 
+# It is impossible to account for chip propagation delay that changes with temperature.
+# Do not relay on the above connections.
+
+# The following is from the quartz on the main board. Does not pass through the mezzanine.
+# NET "ADC_PCB_CLK" 	IOSTANDARD = LVCMOS33;	#main PCB clock is 3.3V
+# NET "ADC_PCB_CLK"	LOC="W30";	# main PCB clock from quartz
+
+# The following are capture clocks forwarded by ADC chips. 
+# Three chips connect to GCLK pins. Either can be used for clocking the entire design.
+# These clocks are used as the main FPGA clock.
+# NET "AD0_DCOA"	LOC="M30";	# DCON_A	Mezz0N_1 not a GCLK!
+# NET "AD1_DCOA"	LOC="A18";	# DCON_B	1060	IO37N_GCLK12	2293	3353
+# NET "AD2_DCOA"	LOC="A16";	# DCON_C	1173	IO36N_GCLK14	2439	3612
+# NET "AD3_DCOA"	LOC="H13";	# DCON_D	Mezz1N_8 not a GCLK!
+# NET "AD4_DCOA"	LOC="A15";	# DCON_B	1027	IO35N_GCLK16	2460	3487
+NET "ADC_PCB_CLK"	LOC="A15";		# returned ADC clock ADC E
+NET "ADC_PCB_CLK" 	IOSTANDARD = LVCMOS18;		# ADC returned clock is 1.8V
+
+NET "ADC_PCB_CLK" TNM_NET = "ADC_PCB_CLK";
+TIMESPEC "TS_ADC_PCB_CLK" = PERIOD "ADC_PCB_CLK" 10 ns HIGH 50 %;  # ADC 100 MHz
+
+# Constraining the ADC bits
+# Timing constraint explained on page 55 of Constraints Guide cdg.pdf
+OFFSET = IN 10 ns VALID 10 ns BEFORE "ADC_PCB_CLK" RISING;
+
+# BF clock period is less critical because there are wait states. 
+NET "BF_PCB_CLK"	LOC="V4";	# BF clock = 120 MHz on BlackVME
+NET "BF_PCB_CLK"  TNM_NET = "BF_PCB_CLK";
+TIMESPEC "TS_BF_PCB_CLK"  = PERIOD "BF_PCB_CLK"  8 ns HIGH 50 %;  # specified as 125 MHz
+
+# ------------------------------------------------
+# --         Termination of the ADC nets        --
+# ------------------------------------------------
+# SelectIO Resources User Guide UG381 v. 1.4 page 17.
+# NET <NET NAME> IN_TERM = <NONE / UNTUNED_SPLIT_25 / UNTUNED_SPLIT_50 / UNTUNED_SPLIT_75>;
+
+NET "ADC_PCB_CLK" IN_TERM = UNTUNED_SPLIT_50;
+NET "AD0*" IN_TERM = UNTUNED_SPLIT_50;
+NET "AD1*" IN_TERM = UNTUNED_SPLIT_50;
+NET "AD2*" IN_TERM = UNTUNED_SPLIT_50;
+NET "AD3*" IN_TERM = UNTUNED_SPLIT_50;
+NET "AD4*" IN_TERM = UNTUNED_SPLIT_50;
+
+#########################################
+###  -- Voltage on the main board --  ###
+#########################################
+
+NET "BF*" 	IOSTANDARD = LVCMOS33;
+NET "LED*" 	IOSTANDARD = LVCMOS33;
+NET "NIM*" 	IOSTANDARD = LVCMOS33;
+# NET "FPGA*" 	IOSTANDARD = LVCMOS33; # DIP switch
+# NET "XSPI*" 	IOSTANDARD = LVCMOS33;
+# NET "HDMI*" 	IOSTANDARD = LVCMOS33; # future: some are LVDS
+# NET "V_*" 	IOSTANDARD = LVCMOS33;
+# NET "CLK*" 	IOSTANDARD = LVCMOS33;
+
+NET "LED_ADC_CLK"	LOC="W29";	# Diag: connect to ADC PLL lock
+NET "LED_BF_CLK"	LOC="AJ1";	# Diag: connect to BF  PLL lock
+#NET "CLK_25MHZ"	LOC="V3";	# from crystal that feeds the BF
+#NET "CLK16_IN"	LOC="W27";	# VME 16 MHz backplane clock input
+
+# Decouple the clock domains.
+# folded timespecs do not work 
+
+#########################################
+###  -- TxDAC timing constraints  --  ###
+#########################################
+# ISE help text 
+# NONE of these constraints were accepted by ISE
+# Example Constraints Associated with OFFSETS
+# NET "ADC_CLK" TNM_NET = "ADC_CLK";  not recognized by ISE. Has to connect to pad.
+# TIMEGRP "ADC_CLK_RISING" = RISING "ADC_PCB_CLK";
+# TIMEGRP "ADC_CLK_FALLING" = FALLING "ADC_PCB_CLK";
+
+# OFFSET = IN <time> VALID <time> BEFORE <rising_clk> TIMEGRP <rising_group>;
+# OFFSET = IN <time> VALID <time> BEFORE <rising_clk> TIMEGRP <falling_group>;
+# OFFSET = IN  2 ns VALID 5 ns BEFORE ADC_CLK TIMEGRP ADC_CLK_RISING;
+# OFFSET = IN -2 ns VALID 5 ns BEFORE ADC_CLK TIMEGRP ADC_CLK_FALLING;
+
+# SYSTEM_JITTER="300.0 ps";  XST does not like it
+#############################################
+###  -- END TxDAC timing constraints  --  ###
+#############################################
+
+###########################################
+###   Two mezzanine connectors 0 and 1  ###
+###########################################
+# Legend: 
+# Left   is daughter A/D configured as single-ended.
+# Middle is daughter A/D configured as differential.
+# Right column is connector pin name on the motherboard.
+# The key to single-ended signals: 
+#   AD0_A<15> = A/D "A", channel A, bit 15.
+#   AD4_B<10> = A/D "E", channel B, bit 10.
+#   AD3_ORB   = A/D "D", channel B, overflow bit
+#   AD0_DCOA  = A/D "A", channel A, digital capture clock
+# The key to differential signals: 
+#   DATN_A<16> = ADC "A", negative member, bit 16 (overflow bit)
+#   DATP_E<16> = ADC "E", positive member, bit 16 (overflow bit)
+#   DCON_A     = ADC "A", negative member, digital capture clock
+#   DCOP_A     = ADC "A", positive member, digital capture clock
+
+# ------------------------------------------------
+# --  Global FPGA clocks or IOs from mezzanine  --
+# ------------------------------------------------
+# If not used as FPGA clocks, clocks become regular FPGA IOs.
+# Some IOs are used as ADC data capture clocks "DCOA".
+# Others transport channel A bit 0 "A<0>" for chips B, D, E.
+
+# connector 0 (J8)
+#   S-ended	FPGA pin	  daught&len	motherbrd net name & len     SUM
+#NET "AD1_DCOA"	LOC="A18";	# DCON_B	1060	IO37N_GCLK12	2293	3353
+#NET "AD2_DCOA"	LOC="A16";	# DCON_C	1173	IO36N_GCLK14	2439	3612
+
+NET "AD1_A<0>"	LOC="C18";	# DCOP_B	1015	IO37P_GCLK13	2438	3453
+NET "AD2_A<0>"	LOC="C16";	# DCOP_C	1208	IO36P_GCLK15	2572	3780
+
+# connector 1 (J21)
+#   S-ended	FPGA pin	  daught&len	motherbrd net name & len
+#NET "AD4_DCOA"	LOC="A15";	# DCON_E	1027	IO35N_GCLK16	2460	3487
+NET "AD4_A<0>"	LOC="B15";	# DCOP_E	989	IO35P_GCLK17	2454	3443
+# unused on daughter	LOC="C15";	#  ---    IO34N_GCLK18	2633
+# unused on daughter	LOC="D15";	#  ---    IO34P_GCLK19	2599
+
+# ------------------------------------------------------------------
+# -- Negative differential pins, connector 0 (J8) on daughter card--
+# ------------------------------------------------------------------
+
+# Blue: net len on ADC-10 daughter. Black: net len on motherboard. Bold: sum of daughter+mother.
+#   S-ended	FPGA pin	  daught&len	motherbrd net name @ len  SUM
+NET "AD0_A<15>" LOC="N25";	# DATN_A<16>	1239	MEZZ0N_0	2878	4117
+#NET "AD0_DCOA"	LOC="M30";	# DCON_A	429	MEZZ0N_1	2837	3266
+NET "AD0_A<13>"	LOC="M27";	# DATN_A<15>	1171	MEZZ0N_2	2598	3769
+NET "AD0_B<16>"	LOC="L30";	# DATN_A<8>	429	MEZZ0N_3	2728	3157	AD0_ORB OVR
+NET "AD0_A<11>"	LOC="L28";	# DATN_A<14>	1208	MEZZ0N_4	2461	3669
+NET "AD0_B<14>"	LOC="L25";	# DATN_A<7>	449	MEZZ0N_5	2748	3197
+NET "AD0_A<9>"	LOC="K30";	# DATN_A<13>	1028	MEZZ0N_6	2306	3334
+NET "AD0_B<12>"	LOC="K27";	# DATN_A<6>	437	MEZZ0N_7	2636	3073
+NET "AD0_A<7>"	LOC="J30";	# DATN_A<12>	969	MEZZ0N_8	2195	3164
+NET "AD0_B<10>"	LOC="J28";	# DATN_A<5>	513	MEZZ0N_9	2567	3080
+NET "AD0_A<5>"	LOC="H30";	# DATN_A<11>	929	MEZZ0N_10	2133	3062
+NET "AD0_B<8>"	LOC="H21";	# DATN_A<4>	575	MEZZ0N_11	2679	3254
+NET "AD0_A<3>"	LOC="H27";	# DATN_A<10>	940	MEZZ0N_12	2262	3202
+NET "AD0_B<6>"	LOC="G30";	# DATN_A<3>	651	MEZZ0N_13	2230	2881
+NET "AD0_A<1>"	LOC="G28";	# DATN_A<9>	938	MEZZ0N_14	2038	2976
+NET "AD0_B<4>"	LOC="F25";	# DATN_A<2>	744	MEZZ0N_15	2369	3113
+NET "AD0_B<2>"	LOC="F23";	# DATN_A<1>	1006	MEZZ0N_16	2231	3237
+NET "AD0_B<0>"	LOC="F30";	# DATN_A<0>	863	MEZZ0N_17	2048	2911
+
+
+# Blue: net len on ADC-10 daughter. Black: net len on motherboard. Bold: sum of daughter+mother.
+#   S-ended	FPGA pin	  daught&len	motherbrd net name & len SUM
+NET "AD1_A<15>"	LOC="F27";	# DATN_B<16>	987	MEZZ0N_18	1986	2973
+NET "AD1_A<13>"	LOC="E30";	# DATN_B<15>	875	MEZZ0N_19	1960	2835
+NET "AD1_A<11>"	LOC="E28";	# DATN_B<14>	911	MEZZ0N_20	1903	2814
+NET "AD1_A<9>"	LOC="D26";	# DATN_B<13>	747	MEZZ0N_21	2072	2819
+NET "AD1_A<7>"	LOC="D30";	# DATN_B<12>	797	MEZZ0N_22	1700	2497
+NET "AD1_A<5>"	LOC="C27";	# DATN_B<11>	695	MEZZ0N_23	1983	2678
+NET "AD1_A<3>"	LOC="C30";	# DATN_B<10>	854	MEZZ0N_24	1648	2502
+NET "AD1_A<1>"	LOC="A26";	# DATN_B<9>	796	MEZZ0N_25	1982	2778
+NET "AD1_B<16>"	LOC="B30";	# DATN_B<8>	876	MEZZ0N_26	1536	2412	AD1_ORB OVR
+NET "AD1_B<14>"	LOC="A27";	# DATN_B<7>	811	MEZZ0N_27	1874	2685
+NET "AD1_B<12>"	LOC="A29";	# DATN_B<6>	784	MEZZ0N_28	1507	2291
+NET "AD1_B<10>"	LOC="C25";	# DATN_B<5>	650	MEZZ0N_29	2005	2655
+NET "AD1_B<8>"	LOC="A25";	# DATN_B<4>	976	MEZZ0N_30	1598	2574
+NET "AD1_B<6>"	LOC="A24";	# DATN_B<3>	770	MEZZ0N_31	1842	2612
+NET "AD1_B<4>"	LOC="D24";	# DATN_B<2>	1137	MEZZ0N_32	1592	2729
+NET "AD1_B<2>"	LOC="A23";	# DATN_B<1>	949	MEZZ0N_33	1756	2705
+NET "AD1_B<0>"	LOC="C23";	# DATN_B<0>	1201	MEZZ0N_34	1591	2792
+
+
+# Blue: net len on ADC-10 daughter. Black: net len on motherboard. Bold: sum of daughter+mother.
+#   S-ended	FPGA pin	  daught&len	motherbrd net name & len
+NET "AD2_A<15>"	LOC="A22";	# DATN_C<16>	806	MEZZ0N_35	1881	2687
+NET "AD2_A<13>"	LOC="D22";	# DATN_C<15>	925	MEZZ0N_36	1597	2522
+NET "AD2_A<11>"	LOC="F22";	# DATN_C<14>	698	MEZZ0N_37	1980	2678
+NET "AD2_A<9>"	LOC="A21";	# DATN_C<13>	805	MEZZ0N_38	1500	2305
+NET "AD2_A<7>"	LOC="C21";	# DATN_C<12>	563	MEZZ0N_39	1820	2383
+NET "AD2_A<5>"	LOC="F21";	# DATN_C<11>	771	MEZZ0N_40	1568	2339
+NET "AD2_A<3>"	LOC="A20";	# DATN_C<10>	608	MEZZ0N_41	1641	2249
+NET "AD2_A<1>"	LOC="D20";	# DATN_C<9>	824	MEZZ0N_42	1541	2365
+NET "AD2_B<16>"	LOC="F19";	# DATN_C<8>	695	MEZZ0N_43	1866	2561	AD2_ORB OVR
+NET "AD2_B<14>"	LOC="A19";	# DATN_C<7>	815	MEZZ0N_44	1353	2168
+NET "AD2_B<12>"	LOC="C19";	# DATN_C<6>	736	MEZZ0N_45	1741	2477
+NET "AD2_B<10>"	LOC="F18";	# DATN_C<5>	954	MEZZ0N_46	1613	2567
+NET "AD2_B<8>"	LOC="A17";	# DATN_C<4>	904	MEZZ0N_47	1578	2482
+NET "AD2_B<6>"	LOC="D18";	# DATN_C<3>	1085	MEZZ0N_48	1495	2580
+NET "AD2_B<4>"	LOC="F17";	# DATN_C<2>	1032	MEZZ0N_49	1769	2801
+NET "AD2_B<2>"	LOC="C17";	# DATN_C<1>	1204	MEZZ0N_50	1359	2563
+NET "AD2_B<0>"	LOC="F16";	# DATN_C<0>	1101	MEZZ0N_51	1832	2933
+
+#NET "TMP_SCL"	LOC="D16";	# MEZZ0N_52 1470 TEMP SENSOR CLOCK
+
+# ------------------------------------------------------------------
+# -- Positive differential pins, connector 0 (J8) on daughter card--
+# ------------------------------------------------------------------
+
+# Blue: net len on ADC-10 daughter. Black: net len on motherboard. Bold: sum of daughter+mother.
+#   S-ended	FPGA pin	  daught&len	motherbrd net name & len
+NET "AD0_A<16>"	LOC="N24";	# DATP_A<16>	1280	MEZZ0P_0	3003	4283	AD0_ORA OVR
+NET "AD0_A<0>"	LOC="M28";	# DCOP_A	438	MEZZ0P_1	3032	3470
+NET "AD0_A<14>"	LOC="M26";	# DATP_A<15>	1195	MEZZ0P_2	2725	3920
+#NET "AD0_DCOB"	LOC="L29";	# DATP_A<8>	429	MEZZ0P_3	2864	3293
+NET "AD0_A<12>"	LOC="L27";	# DATP_A<14>	1206	MEZZ0P_4	2512	3718
+NET "AD0_B<15>"	LOC="L24";	# DATP_A<7>	429	MEZZ0P_5	2906	3335
+NET "AD0_A<10>"	LOC="K28";	# DATP_A<13>	1089	MEZZ0P_6	2366	3455
+NET "AD0_B<13>"	LOC="K26";	# DATP_A<6>	439	MEZZ0P_7	2710	3149
+NET "AD0_A<8>"	LOC="J29";	# DATP_A<12>	1029	MEZZ0P_8	2233	3262
+NET "AD0_B<11>"	LOC="J27";	# DATP_A<5>	466	MEZZ0P_9	2622	3088
+NET "AD0_A<6>"	LOC="H28";	# DATP_A<11>	930	MEZZ0P_10	2274	3204
+NET "AD0_B<9>"	LOC="J21";	# DATP_A<4>	544	MEZZ0P_11	2736	3280
+NET "AD0_A<4>"	LOC="H26";	# DATP_A<10>	929	MEZZ0P_12	2291	3220
+NET "AD0_B<7>"	LOC="G29";	# DATP_A<3>	617	MEZZ0P_13	2317	2934
+NET "AD0_A<2>"	LOC="G27";	# DATP_A<9>	920	MEZZ0P_14	2083	3003
+NET "AD0_B<5>"	LOC="G25";	# DATP_A<2>	694	MEZZ0P_15	2470	3164
+NET "AD0_B<3>"	LOC="G23";	# DATP_A<1>	974	MEZZ0P_16	2369	3343
+NET "AD0_B<1>"	LOC="F28";	# DATP_A<0>	820	MEZZ0P_17	2189	3009
+
+
+# Blue: net len on ADC-10 daughter. Black: net len on motherboard. Bold: sum of daughter+mother.
+#   S-ended	FPGA pin	  daught&len	motherbrd net name & len  SUM
+NET "AD1_A<16>"	LOC="F26";	# DATP_B<16>	1022	MEZZ0P_18	2033	3055	AD1_ORA OVR
+NET "AD1_A<14>"	LOC="E29";	# DATP_B<15>	909	MEZZ0P_19	2044	2953
+NET "AD1_A<12>"	LOC="E27";	# DATP_B<14>	938	MEZZ0P_20	1910	2848
+NET "AD1_A<10>"	LOC="E26";	# DATP_B<13>	808	MEZZ0P_21	2156	2964
+NET "AD1_A<8>"	LOC="D28";	# DATP_B<12>	826	MEZZ0P_22	1821	2647
+NET "AD1_A<6>"	LOC="D27";	# DATP_B<11>	698	MEZZ0P_23	1992	2690
+NET "AD1_A<4>"	LOC="C29";	# DATP_B<10>	836	MEZZ0P_24	1711	2547
+NET "AD1_A<2>"	LOC="C26";	# DATP_B<9>	783	MEZZ0P_25	1945	2728
+#NET "AD1_DCOB"	LOC="B29";	# DATP_B<8>	882	MEZZ0P_26	1611	2493
+NET "AD1_B<15>"	LOC="B27";	# DATP_B<7>	814	MEZZ0P_27	1933	2747
+NET "AD1_B<13>"	LOC="A28";	# DATP_B<6>	786	MEZZ0P_28	1592	2378
+NET "AD1_B<11>"	LOC="D25";	# DATP_B<5>	577	MEZZ0P_29	2083	2660
+NET "AD1_B<9>"	LOC="B25";	# DATP_B<4>	947	MEZZ0P_30	1644	2591
+NET "AD1_B<7>"	LOC="C24";	# DATP_B<3>	719	MEZZ0P_31	1961	2680
+NET "AD1_B<5>"	LOC="E24";	# DATP_B<2>	1094	MEZZ0P_32	1607	2701
+NET "AD1_B<3>"	LOC="B23";	# DATP_B<1>	864	MEZZ0P_33	1814	2678
+NET "AD1_B<1>"	LOC="D23";	# DATP_B<0>	1177	MEZZ0P_34	1637	2814
+
+
+# Blue: net len on ADC-10 daughter. Black: net len on motherboard. Bold: sum of daughter+mother.
+#   S-ended	FPGA pin	  daught&len	motherbrd net name & len  SUM
+NET "AD2_A<16>"	LOC="C22";	# DATP_C<16>	848	MEZZ0P_35	2013	2861	AD2_ORA	OVR
+NET "AD2_A<14>"	LOC="E22";	# DATP_C<15>	958	MEZZ0P_36	1621	2579
+NET "AD2_A<12>"	LOC="G22";	# DATP_C<14>	744	MEZZ0P_37	2040	2784
+NET "AD2_A<10>"	LOC="B21";	# DATP_C<13>	840	MEZZ0P_38	1527	2367
+NET "AD2_A<8>"	LOC="D21";	# DATP_C<12>	617	MEZZ0P_39	1852	2469
+NET "AD2_A<6>"	LOC="G21";	# DATP_C<11>	756	MEZZ0P_40	1622	2378
+NET "AD2_A<4>"	LOC="C20";	# DATP_C<10>	625	MEZZ0P_41	1788	2413
+NET "AD2_A<2>"	LOC="E20";	# DATP_C<9>	824	MEZZ0P_42	1532	2356
+#NET "AD2_DCOB"	LOC="G19";	# DATP_C<8>	683	MEZZ0P_43	1889	2572	capture CLK
+NET "AD2_B<15>"	LOC="B19";	# DATP_C<7>	817	MEZZ0P_44	1394	2211
+NET "AD2_B<13>"	LOC="D19";	# DATP_C<6>	730	MEZZ0P_45	1771	2501
+NET "AD2_B<11>"	LOC="G18";	# DATP_C<5>	900	MEZZ0P_46	1639	2539
+NET "AD2_B<9>"	LOC="B17";	# DATP_C<4>	864	MEZZ0P_47	1629	2493
+NET "AD2_B<7>"	LOC="E18";	# DATP_C<3>	1047	MEZZ0P_48	1532	2579
+NET "AD2_B<5>"	LOC="G17";	# DATP_C<2>	990	MEZZ0P_49	1870	2860
+NET "AD2_B<3>"	LOC="D17";	# DATP_C<1>	1176	MEZZ0P_50	1535	2711
+NET "AD2_B<1>"	LOC="G16";	# DATP_C<0>	1072	MEZZ0P_51	1785	2857
+
+#NET "TMP_SDA"	LOC="E16";	# MEZZ0P_52 1679 TEMP SENSOR DATA
+
+# -------------------------------------------------------------------
+# -- Negative differential pins, connector 1 (J21) on daughter card--
+# -------------------------------------------------------------------
+
+# Blue: net len on ADC-10 daughter. Black: net len on motherboard. Bold: sum of daughter+mother.
+#   S-ended	FPGA pin	  daught&len	motherbrd net name & len  SUM
+NET "AD3_A<15>"	LOC="F15";	# DATN_D<16>	1214	MEZZ1N_0	1521	2735
+NET "AD3_A<13>"	LOC="H15";	# DATN_D<15>	961	MEZZ1N_1	1824	2785
+NET "AD3_A<11>"	LOC="D14";	# DATN_D<14>	1067	MEZZ1N_2	1431	2498
+NET "AD3_A<9>"	LOC="A14";	# DATN_D<13>	830	MEZZ1N_3	1608	2438
+NET "AD3_A<7>"	LOC="F14";	# DATN_D<12>	1057	MEZZ1N_4	1559	2616
+NET "AD3_A<5>"	LOC="A13";	# DATN_D<11>	846	MEZZ1N_5	1645	2491
+NET "AD3_A<3>"	LOC="C13";	# DATN_D<10>	1003	MEZZ1N_6	1389	2392
+NET "AD3_A<1>"	LOC="F13";	# DATN_D<9>	885	MEZZ1N_7	1644	2529
+#NET "AD3_DCOA"	LOC="H13";	# DCON_D	1072	MEZZ1N_8	1691	2763
+NET "AD3_B<16>"	LOC="D12";	# DATN_D<8>	902	MEZZ1N_9	1654	2556	AD3_ORB	OVR
+NET "AD3_B<14>"	LOC="A12";	# DATN_D<7>	1108	MEZZ1N_10	1286	2394
+NET "AD3_B<12>"	LOC="F12";	# DATN_D<6>	958	MEZZ1N_11	1781	2739
+NET "AD3_B<10>"	LOC="A11";	# DATN_D<5>	1246	MEZZ1N_12	1345	2591
+NET "AD3_B<8>"	LOC="C11";	# DATN_D<4>	1135	MEZZ1N_13	1686	2821
+NET "AD3_B<6>"	LOC="F11";	# DATN_D<3>	1406	MEZZ1N_14	1783	3189
+NET "AD3_B<4>"	LOC="A10";	# DATN_D<2>	845	MEZZ1N_15	1602	2447
+NET "AD3_B<2>"	LOC="D10";	# DATN_D<1>	1524	MEZZ1N_16	1725	3249
+NET "AD3_B<0>"	LOC="G10";	# DATN_D<0>	909	MEZZ1N_17	1846	2755
+
+
+# Blue: net len on ADC-10 daughter. Black: net len on motherboard. Bold: sum of daughter+mother.
+#   S-ended	FPGA pin	  daught&len	motherbrd net name & len  SUM
+NET "AD4_A<15>"	LOC="A9";	# DATN_E<16>	977	MEZZ1N_18	1462	2439
+NET "AD4_A<13>"	LOC="C9";	# DATN_E<15>	725	MEZZ1N_19	1764	2489
+NET "AD4_A<11>"	LOC="A8";	# DATN_E<14>	877	MEZZ1N_20	1494	2371
+NET "AD4_A<9>"	LOC="F8";	# DATN_E<13>	598	MEZZ1N_21	1929	2527
+NET "AD4_A<7>"	LOC="D8";	# DATN_E<12>	759	MEZZ1N_22	1716	2475
+NET "AD4_A<5>"	LOC="C7";	# DATN_E<11>	575	MEZZ1N_23	1816	2391
+NET "AD4_A<3>"	LOC="A7";	# DATN_E<10>	808	MEZZ1N_24	1547	2355
+NET "AD4_A<1>"	LOC="F7";	# DATN_E<9>	637	MEZZ1N_25	1986	2623
+NET "AD4_B<16>"	LOC="A6";	# DATN_E<8>	864	MEZZ1N_26	1548	2412	AD4_ORB	OVR
+NET "AD4_B<14>"	LOC="D6";	# DATN_E<7>	715	MEZZ1N_27	1954	2669
+NET "AD4_B<12>"	LOC="F6";	# DATN_E<6>	919	MEZZ1N_28	1860	2779
+NET "AD4_B<10>"	LOC="C5";	# DATN_E<5>	860	MEZZ1N_29	1945	2805
+NET "AD4_B<8>"	LOC="A5";	# DATN_E<4>	1108	MEZZ1N_30	1648	2756
+NET "AD4_B<6>"	LOC="E4";	# DATN_E<3>	967	MEZZ1N_31	2096	3063
+NET "AD4_B<4>"	LOC="H6";	# DATN_E<2>	1278	MEZZ1N_32	2180	3458
+NET "AD4_B<2>"	LOC="D3";	# DATN_E<1>	1157	MEZZ1N_33	2113	3270
+NET "AD4_B<0>"	LOC="A4";	# DATN_E<0>	1393	MEZZ1N_34	1756	3149
+
+
+# ---- TXDAC mixed with ADC SPI bus  -----
+# unused	LOC="F3";	# MEZZ1N_35	2169
+NET "AD1_CS_B"	LOC="G4";	# MEZZ1N_36	2124
+NET "ADC_SDIO"	LOC="E1";	# MEZZ1N_37	2184
+NET "TXDAC<6>"	LOC="A3";	# MEZZ1N_38	1781
+NET "AD3_CS_B"	LOC="F1";	# MEZZ1N_39	2305
+NET "TXDAC<8>"	LOC="A2";	# MEZZ1N_40	1808
+# unused	LOC="C1";	# MEZZ1N_41	2149
+NET "TXDAC<10>"	LOC="D1";	# MEZZ1N_42	2023
+NET "TXDAC_CLK"	LOC="G1";	# MEZZ1N_43	2396 digital synthesis TxDAC clock
+NET "TXDAC<12>"	LOC="H1";	# MEZZ1N_44	2210
+NET "TXDAC<1>"	LOC="H3";	# MEZZ1N_45	2561
+NET "TXDAC_CS_B"	LOC="J1";	# MEZZ1N_46	2226 TxDAC CS#
+NET "TXDAC<3>"	LOC="J4";	# MEZZ1N_47	2608
+NET "TXDAC_RST"	LOC="K1";	# MEZZ1N_48	2336 TxDAC reset / pin mode
+NET "TXDAC<5>"	LOC="K3";	# MEZZ1N_49	2669
+NET "SDAC_SDI"	LOC="L1";	# MEZZ1N_50	2335	SDAC SPI data to SDAC
+NET "SDAC_1_LOAD"	LOC="L4";	# MEZZ1N_51	2709	SDAC 1 LOAD active HIGH
+NET "SDAC_SCK"	LOC="L6";	# MEZZ1N_52	2584	SDAC SPI
+
+# -------------------------------------------------------------------
+# -- Positive differential pins, connector 1 (J21) on daughter card--
+# -------------------------------------------------------------------
+
+# Blue: net len on ADC-10 daughter. Black: net len on motherboard. Bold: sum of daughter+mother.
+#   S-ended	FPGA pin	  daught&len	motherbrd net name & len  SUM
+NET "AD3_A<16>"	LOC="G15";	# DATP_D<16>	1190	MEZZ1P_0	1452	2642	AD3_ORA OVR
+NET "AD3_A<14>"	LOC="J15";	# DATP_D<15>	976	MEZZ1P_1	1793	2769
+NET "AD3_A<12>"	LOC="E14";	# DATP_D<14>	1112	MEZZ1P_2	1512	2624
+NET "AD3_A<10>"	LOC="C14";	# DATP_D<13>	853	MEZZ1P_3	1700	2553
+NET "AD3_A<8>"	LOC="G14";	# DATP_D<12>	1022	MEZZ1P_4	1558	2580
+NET "AD3_A<6>"	LOC="B13";	# DATP_D<11>	784	MEZZ1P_5	1672	2456
+NET "AD3_A<4>"	LOC="D13";	# DATP_D<10>	1013	MEZZ1P_6	1495	2508
+NET "AD3_A<2>"	LOC="G13";	# DATP_D<9>	892	MEZZ1P_7	1671	2563
+NET "AD3_A<0>"	LOC="J13";	# DCOP_D	1074	MEZZ1P_8	1667	2741
+#NET "AD3_DCOB"	LOC="E12";	# DATP_D<8>	902	MEZZ1P_9	1647	2549
+NET "AD3_B<15>"	LOC="C12";	# DATP_D<7>	1106	MEZZ1P_10	1393	2499
+NET "AD3_B<13>"	LOC="G12";	# DATP_D<6>	960	MEZZ1P_11	1770	2730
+NET "AD3_B<11>"	LOC="B11";	# DATP_D<5>	1192	MEZZ1P_12	1342	2534
+NET "AD3_B<9>"	LOC="D11";	# DATP_D<4>	1103	MEZZ1P_13	1663	2766
+NET "AD3_B<7>"	LOC="G11";	# DATP_D<3>	1370	MEZZ1P_14	1656	3026
+NET "AD3_B<5>"	LOC="C10";	# DATP_D<2>	794	MEZZ1P_15	1630	2424
+NET "AD3_B<3>"	LOC="E10";	# DATP_D<1>	1490	MEZZ1P_16	1633	3123
+NET "AD3_B<1>"	LOC="J10";	# DATP_D<0>	884	MEZZ1P_17	1915	2799
+
+
+# Blue: net len on ADC-10 daughter. Black: net len on motherboard. Bold: sum of daughter+mother.
+#   S-ended	FPGA pin	  daught&len	motherbrd net name & len  SUM
+NET "AD4_A<16>"	LOC="B9";	# DATP_E<16>	1002	MEZZ1P_18	1515	2517	AD4_ORA OVR
+NET "AD4_A<14>"	LOC="D9";	# DATP_E<15>	756	MEZZ1P_19	1796	2552
+NET "AD4_A<12>"	LOC="C8";	# DATP_E<14>	912	MEZZ1P_20	1593	2505
+NET "AD4_A<10>"	LOC="G8";	# DATP_E<13>	635	MEZZ1P_21	1963	2598
+NET "AD4_A<8>"	LOC="E8";	# DATP_E<12>	788	MEZZ1P_22	1748	2536
+NET "AD4_A<6>"	LOC="D7";	# DATP_E<11>	553	MEZZ1P_23	1834	2387
+NET "AD4_A<4>"	LOC="B7";	# DATP_E<10>	784	MEZZ1P_24	1556	2340
+NET "AD4_A<2>"	LOC="G7";	# DATP_E<9>	615	MEZZ1P_25	1951	2566
+#NET "AD4_DCOB"	LOC="C6";	# DATP_E<8>	865	MEZZ1P_26	1695	2560
+NET "AD4_B<15>"	LOC="E6";	# DATP_E<7>	698	MEZZ1P_27	1967	2665
+NET "AD4_B<13>"	LOC="G6";	# DATP_E<6>	921	MEZZ1P_28	1983	2904
+NET "AD4_B<11>"	LOC="D5";	# DATP_E<5>	796	MEZZ1P_29	1973	2769
+NET "AD4_B<9>"	LOC="B5";	# DATP_E<4>	1074	MEZZ1P_30	1643	2717
+NET "AD4_B<7>"	LOC="E5";	# DATP_E<3>	928	MEZZ1P_31	2062	2990
+NET "AD4_B<5>"	LOC="J6";	# DATP_E<2>	1227	MEZZ1P_32	2064	3291
+NET "AD4_B<3>"	LOC="D4";	# DATP_E<1>	1079	MEZZ1P_33	2015	3094
+NET "AD4_B<1>"	LOC="C4";	# DATP_E<0>	1368	MEZZ1P_34	1829	3197
+
+
+# --- TXDAC mixed with ADC SPI bus  ---
+# unused	LOC="F4";	# MEZZ1P_35	2173
+NET "AD2_CS_B"	LOC="G5";	# MEZZ1P_36	2029
+NET "AD4_CS_B"	LOC="E3";	# MEZZ1P_37	2157
+NET "AD0_CS_B"	LOC="B3";	# MEZZ1P_38	1826
+NET "ADC_SCK"	LOC="F2";	# MEZZ1P_39	2264
+NET "TXDAC<7>"	LOC="B2";	# MEZZ1P_40	1870
+# unused	LOC="B1";	# MEZZ1P_41	2081
+NET "TXDAC<9>"	LOC="D2";	# MEZZ1P_42	1977
+# unused	LOC="G3";	# MEZZ1P_43	2380
+NET "TXDAC<11>"	LOC="H2";	# MEZZ1P_44	2260
+NET "TXDAC<0>"	LOC="H4";	# MEZZ1P_45	2476
+NET "TXDAC<13>"	LOC="J3";	# MEZZ1P_46	2338
+NET "TXDAC<2>"	LOC="J5";	# MEZZ1P_47	2645
+NET "TXDAC_SDIO"	LOC="K2";	# MEZZ1P_48	2342  TXDAC SPI data
+NET "TXDAC<4>"	LOC="K4";	# MEZZ1P_49	2700
+NET "TXDAC_SCK"	LOC="L3";	# MEZZ1P_50	2385  TXDAC SPI clock
+NET "SDAC_0_LOAD"	LOC="L5";	# MEZZ1P_51	2774	SDAC LOAD active HIGH
+NET "SDAC_PRESET_B"	LOC="L7";	# MEZZ1P_52	2835	preset both SDACs
+
+#########################################
+###     END OF mezzanine connectors   ###
+#########################################
+
+# LEDs driven with hardware stretchers. 
+# The pulses can be one clock wide and will be seen.
+NET "LED<0>"	LOC="AK11";
+NET "LED<1>"	LOC="AJ10";
+NET "LED<2>"	LOC="AK10";
+NET "LED<3>"	LOC="AH9";
+
+# There is one DIP switch with 12 circuits. 
+# -----------------------------------------
+# VME GEO address switches are preassigned in hardware.
+# GEO switches are ONLY to be used in non-VME64 environment.
+# In VME64 crate GEO lines are grounded by the crate.
+#NET "V_GEO<0>"	LOC="AJ14";	# VME geographical address 0
+#NET "V_GEO<1>"	LOC="AK14";	# VME geographical address 1
+#NET "V_GEO<2>"	LOC="AH14";	# VME geographical address 2
+#NET "V_GEO<3>"	LOC="AG14";	# VME geographical address 3
+#NET "V_GEO<4>"	LOC="AE14";	# VME geographical address 4 
+          
+# Binary-coded VME interrupt switch is preassigned on silkscreen.
+# These can be used for sth else, but it would be confusing.
+#NET "V_DIP<0>"	LOC="AD14";	# VME IRQ level DIP sw
+#NET "V_DIP<1>"	LOC="AC14";	# VME IRQ level DIP sw
+#NET "V_DIP<2>"	LOC="AB14";	# VME IRQ level DIP sw
+#NET "V_DIP<3>"	LOC="AK13";	# VME IRQ level DIP sw
+
+# Last three switches are unassigned and free to use.
+# NET "FPGA_DIP<0>"	LOC="AH13";	# 
+# The following nets are ENABLED in simple firmware.
+# They select the ADC capture clock
+# NOTE: The entire concept was removed on May/12/2012
+# 00 -> 0 deg.  01 -> 90 deg.  10 -> 180 deg.  11 -> 270 deg
+# NET "FPGA_DIP<1>"	LOC="AG13";	# ADC capture clock select
+# NET "FPGA_DIP<2>"	LOC="AF13";	# ADC capture clock select
+
+# ------ End of DIP switch --------
+
+# Miscellaneous FPGA pins
+#NET "FPGA_M0"	LOC="AK26" # FPGA boot mode M0 routed to TP4
+#NET "FPGA_TP5"	LOC="AH8";	# test point
+#NET "FPGA_TP6"	LOC="AK9";	# test point
+#NET "FPGA_TP7"	LOC="AK8";	# test point
+#NET "FPGA_TP9"	LOC="AK5";	# test point
+       
+# NIM / TTL IOs are labeled NIM, but can also be TTL.
+# NIM is falling edge 0->-1V, while TTL is rising edge 0->3V. 
+# The rising/falling edge switch has to be absorbed into firmware 
+# using an XOR equation in the fabric.
+NET "NIM_IN<0>"	LOC="U28";
+NET "NIM_IN<1>"	LOC="U27";
+NET "NIM_IN<2>"	LOC="V30";
+NET "NIM_IN<3>"	LOC="V28";
+
+NET "NIM_OUT<0>"	LOC="V27";
+NET "NIM_OUT<1>"	LOC="V26";
+NET "NIM_OUT<2>"	LOC="V23";
+NET "NIM_OUT<3>"	LOC="V24";
+
+# Individual single-ended HDMI wires.
+# CAVEAT: In Rev.E the pin assignemnt has changed to provide 
+#    the 5th differential pin. 
+#NET "HDMI<0>"	LOC="AF30";
+#NET "HDMI<1>"	LOC="AF28";	# Former rev
+#NET "HDMI<1>"	LOC="AJ20";	# Rev.E
+#NET "HDMI<2>"	LOC="AF25";
+#NET "HDMI<3>"	LOC="AF23";
+#NET "HDMI<4>"	LOC="AG30";
+#NET "HDMI<5>"	LOC="AG29";
+#NET "HDMI<6>"	LOC="AG28";	# Former rev
+#NET "HDMI<6>"	LOC="AK20";	# Rev.E
+# Differential twisted-pairs (N for neg, P for pos).
+# Not sure yet how such diff pairs should be handled.
+#NET "HDMI_N<0>"	LOC="AK19";
+#NET "HDMI_N<1>"	LOC="AK18";
+#NET "HDMI_N<2>"	LOC="AK17";
+#NET "HDMI_N<3>"	LOC="AK16";
+#NET "HDMI_P<0>"	LOC="AH19";
+#NET "HDMI_P<1>"	LOC="AJ18";
+#NET "HDMI_P<2>"	LOC="AH17";
+#NET "HDMI_P<3>"	LOC="AJ16";
+
+# Two asynch memory selects are routed to FPGA, active LOW. 
+# The other two are routed to the ethernet and USB chips.
+# Either bank can be independently configured 16/32 bit.
+# The start address in BF memory space is given (byte address).
+NET "BF_AMS0_b"	LOC="R7";	# asynch bank 0 0x2000 0000
+NET "BF_AMS1_b"	LOC="R6";	# asynch bank 1 0x2400 0000
+NET "BF_AMS*"	TIG;	# slow nets
+
+# AOE and ARE have slightly different timing.
+# There is no need to use AOE. ARE is sufficient. 
+# Both are connected, but do not need to be used.
+NET "BF_ARE_b"	LOC="T7";	# read   enable (BF reads)
+NET "BF_ARE_b"	TIG;	# slow net
+
+NET "BF_AWE_b"	LOC="T9";	# write  enable (BF writes)
+NET "BF_AWE_b"	TIG;	# slow net
+
+#NET "BF_AOE_b"	LOC="T8";	# output enable (BF reads)
+#NET "BF_AOE_b"	TIG;	# slow net
+#NET "BF_ARDY"	LOC="T6";	# data ready (read cycle stretching)
+#NET "BF_ARD"	TIG;	# slow net
+
+# BF addressing is quite elaborate with 25 address lines,
+# and also possibility to address bytes, 16-bit words, and 32-bit words.
+# BF lowest 32-bit addr line is A2.
+# 8-bit bus is not directly supported at all, thus A0 is absent.
+# ABE3 takes role of A1 in 16-bit BF bus mode.
+# When 32-bit access is enabled, ABE3 can stay defined as addr 1, 
+# because it can be used to write "short int" in 32-bit mode.
+#    BF_A<0> does not exist at all.
+#    BF_A<1> does not exist in 32-bit mode.
+# ABE_b are active LOW only when WRITING.
+# ABE_b are NOT active when READING. HRM p. 16.25
+
+#NET "BF_ABE_b<0>"	LOC="T4";	# byte select 0
+#NET "BF_ABE_b<1>"	LOC="T3";	# byte select 1
+#NET "BF_ABE_b<2>"	LOC="T2";	# byte select 2
+#NET "BF_ABE_b<3>"	LOC="T1";	# byte select 3 (also address 1)
+#NET "BF_ABE*"	TIG;	# slow nets
+
+# When AMSx is 32, BF_ADDR(1) is not driven. But for 16 bits, ADDR(1) is needed.
+# It is sufficient to connect ABE3 and name it ADDR(1).
+# This works when ABEx are not used as byte selects. I do not see 
+# any reason to access individual bytes. Thus, ABE3 can be used as ADDR(1).
+
+#    BF_A<0> does not exist. ABE strobes can be used instead.
+# NET "BF_ADDR*"	TIG;	# slow nets
+# NET "BF_ADDR<1>" not used	LOC="T1";	# same as ABE3
+NET "BF_ADDR<2>"	LOC="AC3";
+NET "BF_ADDR<3>"	LOC="AC4";
+NET "BF_ADDR<4>"	LOC="AC5";
+NET "BF_ADDR<5>"	LOC="U4";
+NET "BF_ADDR<6>"	LOC="U5";
+NET "BF_ADDR<7>"	LOC="U6";
+NET "BF_ADDR<8>"	LOC="U7";
+NET "BF_ADDR<9>"	LOC="R4";
+NET "BF_ADDR<10>"	LOC="R5";
+NET "BF_ADDR<11>"	LOC="R3";
+NET "BF_ADDR<12>"	LOC="R1";
+NET "BF_ADDR<13>"	LOC="P6";
+NET "BF_ADDR<14>"	LOC="P4";
+NET "BF_ADDR<15>"	LOC="N9";
+NET "BF_ADDR<16>"	LOC="P7";
+NET "BF_ADDR<17>"	LOC="P3";
+NET "BF_ADDR<18>"	LOC="N10";
+NET "BF_ADDR<19>"	LOC="P1";
+NET "BF_ADDR<20>"	LOC="P2";
+NET "BF_ADDR<21>"	LOC="N8";
+NET "BF_ADDR<22>"	LOC="N7";
+NET "BF_ADDR<23>"	LOC="N5";
+NET "BF_ADDR<24>"	LOC="N4";
+NET "BF_ADDR<25>"	LOC="N3";
+
+# Blackfin asynch memory bus, 32-bit wide
+NET "BF_DATA<0>"	LOC="AD7";
+NET "BF_DATA<1>"	LOC="AC1";
+NET "BF_DATA<2>"	LOC="AD4";
+NET "BF_DATA<3>"	LOC="AD6";
+NET "BF_DATA<4>"	LOC="AD2";
+NET "BF_DATA<5>"	LOC="AD3";
+NET "BF_DATA<6>"	LOC="AE7";
+NET "BF_DATA<7>"	LOC="AD1";
+NET "BF_DATA<8>"	LOC="AE5";
+NET "BF_DATA<9>"	LOC="AE6";
+NET "BF_DATA<10>"	LOC="AE3";
+NET "BF_DATA<11>"	LOC="AE4";
+NET "BF_DATA<12>"	LOC="AF9";
+NET "BF_DATA<13>"	LOC="AE1";
+NET "BF_DATA<14>"	LOC="AF6";
+NET "BF_DATA<15>"	LOC="AF7";
+# Activate bits 16:32 when AMSx configured 32-bit
+NET "BF_DATA<16>"	LOC="AF3";
+NET "BF_DATA<17>"	LOC="AF4";
+NET "BF_DATA<18>"	LOC="AF1";
+NET "BF_DATA<19>"	LOC="AF2";
+NET "BF_DATA<20>"	LOC="AG7";
+NET "BF_DATA<21>"	LOC="AG8";
+NET "BF_DATA<22>"	LOC="AG5";
+NET "BF_DATA<23>"	LOC="AG6";
+NET "BF_DATA<24>"	LOC="AG3";
+NET "BF_DATA<25>"	LOC="AG4";
+NET "BF_DATA<26>"	LOC="AH7";
+NET "BF_DATA<27>"	LOC="AG1";
+NET "BF_DATA<28>"	LOC="AH5";
+NET "BF_DATA<29>"	LOC="AH6";
+NET "BF_DATA<30>"	LOC="AH3";
+NET "BF_DATA<31>"	LOC="AH4";
+
+# Blackfin non-maskable interrupts. DO NOT USE THESE.
+# Using NMIs is INCOMPATIBLE with Linux kernel.
+# Only to be used for special applications as "last resort" 
+# (e.g., imminent power failure, etc.)
+# These nets are pulled LOW on the board.
+# Under "normal" circumstances keep commented out.
+#NET "BF_NMI0"	LOC="AH2";
+#NET "BF_NMI1"	LOC="AH1";
+
+# Blackfin GPIO. 
+# PF0 --> DONE, PF8 --> X_PROGRAM.
+# Only one uncommitted PF1 pin is connected to the FPGA.
+# To be used as Blackfin event interrupt.
+# Thirty two more GPIOs are available under PPI pins.
+# If not used as PPI, can be used as triggers and resets.
+
+NET "BF_PF1"	LOC="AJ4";	# Blackfin PF1 / SPISEL_1 / TMR1
+#NET "BF_PF32"	LOC="AA3";	# borrowed from PPI 1
+#NET "BF_PF33"	LOC="AA1";	# borrowed from PPI 1
+
+# SPI bus connects to the flash chip and is used for FPGA boot. 
+# Note that Blackfin is driving the same SPI from the other side. 
+# In this way the SPI flash can be reprogrammed by Blackfin. 
+# The FPGA should be kept in reset while SPI flash is being
+# reprogrammed by Blackfin.
+# These pins need not be active if SPI flash is not going to be
+# actively accessed by the FPGA itself.
+#NET "XSPI_CS_B"	LOC="AK6";	# Blackfin PF3 / SPISEL_3 / TMR3
+#NET "XSPI_MISO"	LOC="AH25";	# also Blackfin MISO
+#NET "XSPI_MOSI"	LOC="AK25";	# also Blackfin MOSI
+#NET "XSPI_SCK"	LOC="AJ26";	# also Blackfin SPI SCK
+
+# Two independent Blackfin PPIs are fast 16-bit FIFOs. 
+# When not used as FIFOs they can be used as GPIOs.
+# The width of these FIFOs can be changed at the Blackfin side 
+# from 8 bits up to 16 bits. The unused FIFO pins can be used 
+# as GPIOs. Either Blackfin or FPGA can drive the strobes.
+# Note that FIFO transaction can be handled by Blackfin DMA. 
+# An interrupt can be automatically raised after the FIFO transfer
+# is completed. The strobes can also be used as timers, 
+# i.e., counters, if not used for PPI.
+#NET "BF_PPI_0<0>"	LOC="Y7";
+#NET "BF_PPI_0<1>"	LOC="Y8";
+#NET "BF_PPI_0<2>"	LOC="Y9";
+#NET "BF_PPI_0<3>"	LOC="W1";
+#NET "BF_PPI_0<4>"	LOC="W3";
+#NET "BF_PPI_0<5>"	LOC="W4";
+#NET "BF_PPI_0<6>"	LOC="W5";
+#NET "BF_PPI_0<7>"	LOC="W6";
+#NET "BF_PPI_0<8>"	LOC="W7";	# PF40
+#NET "BF_PPI_0<9>"	LOC="W9";	# PF41
+#NET "BF_PPI_0<10>"	LOC="V2";	# PF42
+#NET "BF_PPI_0<11>"	LOC="V1";	# PF43
+#NET "BF_PPI_0<12>"	LOC="V8";	# PF44
+#NET "BF_PPI_0<13>"	LOC="V7";	# PF45
+#NET "BF_PPI_0<14>"	LOC="V10";	# PF46
+#NET "BF_PPI_0<15>"	LOC="V9";	# PF47
+
+#NET "BF_PPI_0_CLK"	LOC="N1";	# Input-only at BF side
+#NET "BF_PPI_0_S1"	LOC="U3";	# PPI 0 strobe 1 / TMR8
+#NET "BF_PPI_0_S2"	LOC="U1";	# PPI 0 strobe 2 / TMR9
+#NET "BF_PPI_0_S3"	LOC="M6";	# PPI 0 strobe 3
+
+#NET "BF_PPI_1<0>"	LOC="AC6";
+#NET "BF_PPI_1<1>"	LOC="AA4";
+#NET "BF_PPI_1<2>"	LOC="AB1";
+#NET "BF_PPI_1<3>"	LOC="AB2";
+#NET "BF_PPI_1<4>"	LOC="AB3";
+#NET "BF_PPI_1<5>"	LOC="AB4";
+#NET "BF_PPI_1<6>"	LOC="AB7";
+#NET "BF_PPI_1<7>"	LOC="AB6";
+#NET "BF_PPI_1<8>"	LOC="AA3";	# PF32
+#NET "BF_PPI_1<9>"	LOC="AA1";	# PF33
+#NET "BF_PPI_1<10>"	LOC="AA6";	# PF34
+#NET "BF_PPI_1<11>"	LOC="AA5";	# PF35
+#NET "BF_PPI_1<12>"	LOC="AA9";	# PF36
+#NET "BF_PPI_1<13>"	LOC="AA7";	# PF37
+#NET "BF_PPI_1<14>"	LOC="Y1";	# PF38
+#NET "BF_PPI_1<15>"	LOC="AA10";	# PF39
+#NET "BF_PPI_1_CLK"	LOC="M7";	# Input-only at BF side
+#NET "BF_PPI_1_S1"	LOC="Y2";	# PPI 1 strobe 1 / TMR10
+#NET "BF_PPI_1_S2"	LOC="Y4";	# PPI 1 strobe 2 / TMR11
+#NET "BF_PPI_1_S3"	LOC="Y6";	# PPI 1 strobe 3
+           
+########################
+###   VME interface  ###
+########################
+# VME interface is hidden in this fold 
